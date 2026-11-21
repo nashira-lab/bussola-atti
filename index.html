@@ -194,7 +194,8 @@ dialog::backdrop{background:rgba(10,29,59,.6)}
 .ent input[type=checkbox]{width:18px;height:18px;accent-color:var(--orange);flex:none}
 .ent .tag{flex:none;background:var(--navy);color:#fff;border-radius:6px;padding:2px 8px;font-weight:600;font-size:12px}
 .ent.off .tag{background:#B8C2D1}
-.ent .orig{overflow-wrap:anywhere;flex:1 1 auto;min-width:0}
+.ent{flex-wrap:wrap}
+.ent .orig{overflow-wrap:break-word;flex:1 1 9em;min-width:7em}
 .ent.off .orig{color:var(--muted)}
 .ent .kind{font-size:11px;color:var(--muted);flex:none}
 .ent .mn{flex:none;border:1.5px solid var(--line);background:#fff;border-radius:999px;padding:2px 10px;font-size:12px;cursor:pointer}
@@ -267,7 +268,7 @@ dialog::backdrop{background:rgba(10,29,59,.6)}
             <div><label class="lab" for="pMin">Minori</label><input type="text" id="pMin" placeholder="es. VERDI Luca"></div>
           </div>
           <div id="ents" class="ents" aria-live="polite"></div>
-          <p class="small muted">Riconosce da sola cognomi in maiuscolo seguiti dal nome, codici fiscali, targhe, documenti, telefoni, email, IBAN, indirizzi e date di nascita. Togli la spunta a ciò che deve restare in chiaro. Il resto, per esempio un soprannome, scrivilo tra le persone.</p>
+          <p class="small muted">Riconosce da sola i nomi scritti come negli atti (ROSSI Mario, Ahmed EL AMRANI), i nomi preceduti da titoli o parentele (sig.ra, dott., mio figlio), codici fiscali, targhe, documenti, telai, IMEI, POD, telefoni, email, profili social, indirizzi IP, indirizzi e date di nascita. Togli la spunta a ciò che deve restare in chiaro. Il resto, per esempio un soprannome, scrivilo tra le persone.</p>
           <button type="button" class="btn ghost" id="prevBtn" aria-expanded="false" style="margin-top:8px">Vedi il testo che parte</button>
           <div class="letter" id="prev" hidden></div>
         </div>
@@ -602,87 +603,145 @@ function copyNow(text){
 
 /* ---------- pseudonimizzazione (solo sul dispositivo) ---------- */
 const L = "\\p{L}";
-const STOP_ACRO = new Set("CNR PM PG SIT GIP GUP GDF DDA DIA ASL ATS INPS INAIL ANAS UE USA ART ARTT CPP CP DLGS DPR TULPS CDS NR SPA SRL SNC SAS OGGETTO VERBALE ANNOTAZIONE COMUNICAZIONE NOTIZIA REATO RELAZIONE SERVIZIO DATI FATTI TESTO IL LA LO LE GLI DI DA IN AL DEL DELLA PER CON NON SU NEL ED OPPURE SI NO OK SMS PEC GPS PIN DNA TSO RSA NB AVV DOTT SIG SIGRA ATTO ATTI PARTE PARTI DICHIARA DICHIARAZIONE SUBITO FATTI CHECK".split(" "));
-const STOP_NAME = new Set("Via Viale Piazza Corso Vicolo Largo Località Strada Nato Nata Residente Presso In Il La Lo Le Gli Data Ore Alle Dal Dalla Che Con Per Del Della Di Da Si Non Ma Ed Mentre Quindi Poi".split(" "));
-const KIND = {per:"Persona", min:"Minore", cf:"Codice fiscale", iban:"IBAN", mail:"Email", doc:"Documento", targa:"Targa", tel:"Telefono", ind:"Indirizzo", nas:"Data di nascita"};
-const PREFIX = {per:"Soggetto ", min:"M", cf:"CF ", iban:"IBAN ", mail:"Email ", doc:"Documento ", targa:"Targa ", tel:"Telefono ", ind:"Indirizzo ", nas:"Data di nascita "};
+const STOP_ACRO = new Set("CNR PM PG SIT GIP GUP GDF DDA DIA ASL ATS INPS INAIL ANAS UE USA ART ARTT CPP CP DLGS DPR TULPS CDS NR SPA SRL SNC SAS OGGETTO VERBALE ANNOTAZIONE COMUNICAZIONE NOTIZIA REATO RELAZIONE SERVIZIO DATI FATTI TESTO IL GLI IN AL PER CON NON SU NEL ED OPPURE SI NO OK SMS PEC GPS PIN DNA TSO RSA NB AVV DOTT SIG SIGRA ATTO ATTI PARTE PARTI DICHIARA DICHIARAZIONE SUBITO CHECK PROCURA REPUBBLICA TRIBUNALE RGNR RG PROC PEN IMEI POD PDR IP SIM ID".split(" "));
+const PARTICLES = new Set("DE DI DA DEL DELLA DELLO DEI DEGLI LO LA LI LE EL AL BEN ABU VAN VON".split(" "));
+const STOP_NAME = new Set("Via Viale Piazza Corso Vicolo Largo Località Contrada Strada Nato Nata Residente Presso In Il La Lo Le Gli Data Ore Alle Dal Dalla Che Con Per Del Della Di Da Si Non Ma Ed Mentre Quindi Poi Procura Repubblica Tribunale Comune Questura Prefettura Stazione Compagnia Polizia Locale Codice Penale".split(" "));
+const KIND = {per:"Persona", min:"Minore", cog:"Cognome", cf:"Codice fiscale", iban:"IBAN", mail:"Email", doc:"Documento", cod:"Codice", targa:"Targa", tel:"Telefono", ind:"Indirizzo", nas:"Data di nascita", ip:"Indirizzo IP", soc:"Profilo"};
+const PREFIX = {per:"Soggetto ", min:"M", cog:"Cognome ", cf:"CF ", iban:"IBAN ", mail:"Email ", doc:"Documento ", cod:"Codice ", targa:"Targa ", tel:"Telefono ", ind:"Indirizzo ", nas:"Data di nascita ", ip:"IP ", soc:"Profilo "};
+const LABEL_WORDS = "Soggetto|M|Cognome|CF|IBAN|Email|Documento|Codice|Targa|Telefono|Indirizzo|Data di nascita|IP|Profilo";
 const excluded = new Set();   // chiavi lasciate in chiaro
 const minorFlip = new Set();  // chiavi di persone segnate come minori dall'utente
 let lastMap = [];             // [{label, orig}] dell'ultima richiesta copiata
 
 function splitNames(s){ return String(s || "").split(/[,;\n]+/).map(x => x.trim().replace(/\s+/g, " ")).filter(x => x.length >= 2); }
-const personKey = s => "per:" + s.toLowerCase().split(/\s+/).filter(Boolean).sort().join(" ");
+const personKey = s => "per:" + s.toLowerCase().replace(/['’]/g, "'").split(/\s+/).filter(Boolean).sort().join(" ");
 const tokRe = toks => toks.map(reEsc).join("\\s+");
 const bound = core => new RegExp("(?<![" + L + "\\d])(?:" + core + ")(?![" + L + "\\d])", "giu");
+const boundCs = core => new RegExp("(?<![" + L + "\\d])(?:" + core + ")(?![" + L + "\\d])", "gu");
+const isCaps = t => t.length > 1 && t === t.toUpperCase() && /\p{Lu}/u.test(t);
 function surnameOf(toks){
-  const caps = toks.filter(t => t.length > 1 && t === t.toUpperCase() && /\p{Lu}/u.test(t));
-  return caps.length ? caps.join(" ") : toks[toks.length - 1];
+  const i = toks.findIndex(isCaps);
+  if(i >= 0){ let j = i; while(j + 1 < toks.length && isCaps(toks[j + 1])) j++; return toks.slice(i, j + 1).join(" "); }
+  return toks[toks.length - 1];
+}
+// toglie dal cognome le parole in maiuscolo che non sono cognomi (VERBALE, CNR…), conservando le particelle (DE, LO, D'…)
+function cleanSurname(toks){
+  toks = toks.slice();
+  const stop = t => STOP_ACRO.has(t.replace(/['’]/g, ""));
+  while(toks.length){
+    if(PARTICLES.has(toks[0]) && toks.length > 1 && !stop(toks[1]) && !PARTICLES.has(toks[1])) break;
+    if(stop(toks[0]) || PARTICLES.has(toks[0])){ toks.shift(); continue; }
+    break;
+  }
+  if(!toks.length || toks.every(t => stop(t) || PARTICLES.has(t))) return null;
+  return toks;
 }
 function allMatches(re, text, fn){ re.lastIndex = 0; let m; while((m = re.exec(text))){ if(m[0] === ""){ re.lastIndex++; continue; } fn(m); } }
+
+const SUR = "(?:(?:(?:DE|DI|DA|DEL|DELLA|DELLO|DEI|DEGLI|LO|LA|LI|LE|EL|AL|BEN|ABU|VAN|VON)\\s+)|(?:D|DELL)['’])?\\p{Lu}{2,}(?:['’]\\p{Lu}+)?(?:\\s+\\p{Lu}{2,}(?:['’]\\p{Lu}+)?)?";
+const GIVEN = "\\p{Lu}\\p{Ll}+(?:['’]\\p{Ll}+)?";
 
 function detect(text, pers, mins){
   const cands = [];
   const reserved = [];
-  allMatches(/(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)|(?<!\d)\d{1,2}[.:]\d{2}(?![\d.:\/])/g, text, m => reserved.push([m.index, m.index + m[0].length]));
-  const people = new Map(); // key -> {disp, minor, surname, user}
-  const addPerson = (key, disp, minor, surname, user) => {
+  allMatches(/(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)|(?<![\d.])\d{1,2}[.:]\d{2}(?![\d.:\/])/g, text, m => reserved.push([m.index, m.index + m[0].length]));
+  const people = new Map(); // key -> {disp, minor, surname, user, single}
+  const addPerson = (key, disp, minor, surname, user, single) => {
     const p = people.get(key);
-    if(!p) people.set(key, {disp, minor, surname, user});
+    if(!p) people.set(key, {disp, minor, surname, user, single});
     else { if(user && !p.user){ p.disp = disp; p.user = true; } if(minor) p.minor = true; }
   };
-  // persone indicate dall'utente
+  const push = (s, e, key, pr, kind) => cands.push({s, e, key, pr, kind});
+  // 1. persone indicate dall'utente
   [[pers, false], [mins, true]].forEach(([list, minor]) => splitNames(list).forEach(n => {
     const toks = n.split(" "), key = personKey(n);
-    addPerson(key, n, minor, toks.length > 1 ? surnameOf(toks) : null, true);
+    addPerson(key, n, minor, toks.length > 1 ? surnameOf(toks) : null, true, false);
     const vars = [tokRe(toks)];
     if(toks.length === 2) vars.push(tokRe([toks[1], toks[0]]));
+    if(toks.length > 2){ const s = surnameOf(toks); const g = toks.filter(t => !s.split(" ").includes(t)); vars.push(tokRe(g.concat(s.split(" ")))); vars.push(tokRe(s.split(" ").concat(g))); }
     // per i minori si copre anche il solo nome di battesimo
-    if(minor && toks.length > 1){ const sur = surnameOf(toks); toks.filter(t => t !== sur && t.length >= 3).forEach(t => vars.push(reEsc(t))); }
-    allMatches(bound(vars.join("|")), text, m => cands.push({s:m.index, e:m.index + m[0].length, key, pr:3}));
+    if(minor && toks.length > 1){ const sur = surnameOf(toks).split(" "); toks.filter(t => !sur.includes(t) && t.length >= 3).forEach(t => vars.push(reEsc(t))); }
+    allMatches(bound(vars.join("|")), text, m => push(m.index, m.index + m[0].length, key, 4));
   }));
-  // cognome in maiuscolo seguito dal nome (uso degli atti)
-  allMatches(/(?<![\p{L}\d])(\p{Lu}{2,}(?:['’]\p{Lu}+)?(?:\s+\p{Lu}{2,})?)\s+(\p{Lu}\p{Ll}+)(?:\s+(\p{Lu}\p{Ll}+))?(?![\p{L}\d])/gu, text, m => {
-    let sur = m[1].split(/\s+/);
-    let start = m.index;
-    while(sur.length && STOP_ACRO.has(sur[0].replace(/['’]/g, ""))){ start = text.indexOf(sur[1] || m[2], start + sur[0].length); sur = sur.slice(1); }
-    if(!sur.length || sur.every(t => STOP_ACRO.has(t))) return;
-    if(STOP_NAME.has(m[2])) return;
+  // 2. COGNOME Nome (uso degli atti), anche con particelle: LO PRESTI, D'AMICO, DE LUCA
+  allMatches(new RegExp("(?<![\\p{L}\\d'’])(" + SUR + ")\\s+(" + GIVEN + ")(?:\\s+(" + GIVEN + "))?(?![\\p{L}\\d])", "gu"), text, m => {
+    const sur = cleanSurname(m[1].split(/\s+/));
+    if(!sur || STOP_NAME.has(m[2])) return;
+    const start = m.index + m[0].indexOf(sur[0]);
     const given = [m[2]];
     if(m[3] && !STOP_NAME.has(m[3])) given.push(m[3]);
     const disp = sur.join(" ") + " " + given.join(" ");
     const endIdx = given.length === 2 ? m.index + m[0].length : m.index + m[0].indexOf(m[2], m[1].length) + m[2].length;
     const key = personKey(disp);
-    addPerson(key, disp, false, sur.join(" "), false);
-    cands.push({s:start, e:endIdx, key, pr:2});
+    addPerson(key, disp, false, sur.join(" "), false, false);
+    push(start, endIdx, key, 3);
   });
-  // cognome da solo, se non è condiviso da più persone
+  // 3. Nome COGNOME (ordine inverso, frequente con nomi stranieri: Ahmed EL AMRANI)
+  allMatches(new RegExp("(?<![\\p{L}\\d'’])(" + GIVEN + ")\\s+(" + SUR + ")(?![\\p{L}\\d'’])", "gu"), text, m => {
+    if(STOP_NAME.has(m[1])) return;
+    const sur = cleanSurname(m[2].split(/\s+/));
+    if(!sur) return;
+    const disp = m[1] + " " + sur.join(" ");
+    const key = personKey(disp);
+    addPerson(key, disp, false, sur.join(" "), false, false);
+    const endIdx = m.index + m[0].indexOf(sur[sur.length - 1], m[1].length) + sur[sur.length - 1].length;
+    push(m.index, endIdx, key, 3);
+  });
+  // 4. indizi dal contesto: titolo + Nome Cognome, parentela + Nome, età da minore + Nome
+  const ctxName = (re, minor, group) => allMatches(re, text, m => {
+    const name = m[group];
+    if(!name || name.split(/\s+/).some(t => STOP_NAME.has(t))) return;
+    const s = m.index + m[0].lastIndexOf(name);
+    const toks = name.split(/\s+/), key = personKey(name);
+    addPerson(key, name, minor, toks.length > 1 ? toks[toks.length - 1] : null, false, toks.length === 1);
+    push(s, s + name.length, key, 2);
+  });
+  ctxName(/(?<![\p{L}])(?:[Ss]ig\.(?:ra|na)?|[Ss]ignor[ae]?|[Dd]ott\.(?:ssa)?|[Dd]ottor(?:essa)?|[Aa]vv\.(?:to)?|[Aa]vvocat[oa]|[Pp]rof\.(?:ssa)?|[Ii]ng\.|[Gg]eom\.|[Mm]aresciallo|[Bb]rigadiere|[Aa]ppuntato|[Ii]spettore|[Ss]ovrintendente)\s+(\p{Lu}\p{Ll}+(?:['’]\p{Ll}+)?(?:\s+\p{Lu}\p{Ll}+(?:['’]\p{Ll}+)?){0,2})/gu, false, 1);
+  ctxName(/(?<![\p{L}])(?:figli[oa]|moglie|marito|madre|padre|mamma|papà|fratello|sorella|compagn[oa]|fidanzat[oa]|cognat[oa]|nipote|zi[oa]|nonn[oa]|vicin[oa]|amic[oa]|convivente|badante|collega)\s+(\p{Lu}\p{Ll}+)(?![\p{L}])/gu, false, 1);
+  ctxName(/(?<![\p{L}])(?:(?:undic|dodic|tredic|quattordic|quindic|sedic|diciassett)enne|[Mm]inore|[Bb]ambin[oa]|[Rr]agazzin[oa]|[Nn]eonat[oa]|[Pp]iccol[oa])\s+(\p{Lu}\p{Ll}+)(?![\p{L}])/gu, true, 1);
+  // il nome trovato dal contesto si copre in tutto il testo
+  people.forEach((p, key) => { if(p.single) allMatches(boundCs(reEsc(p.disp)), text, m => push(m.index, m.index + m[0].length, key, 1)); });
+  // 5. cognome da solo: se appartiene a una sola persona prende la sua etichetta, se è condiviso diventa [Cognome N]
   const bySur = new Map();
-  people.forEach((p, key) => { if(p.surname && p.surname.length >= 3){ const k = p.surname.toLowerCase(); bySur.set(k, bySur.has(k) ? null : key); } });
-  bySur.forEach((key, s) => {
-    if(!key) return;
-    const p = people.get(key);
-    const re = p.user ? bound(tokRe(p.surname.split(/\s+/))) : new RegExp("(?<![" + L + "\\d])" + tokRe(p.surname.split(/\s+/)) + "(?![" + L + "\\d])", "gu");
-    allMatches(re, text, m => cands.push({s:m.index, e:m.index + m[0].length, key, pr:1}));
+  people.forEach((p, key) => { if(p.surname && p.surname.length >= 3){ const k = p.surname.toLowerCase(); const v = bySur.get(k) || {keys:[], user:false, sur:p.surname}; v.keys.push(key); v.user = v.user || p.user; bySur.set(k, v); } });
+  bySur.forEach(v => {
+    const core = tokRe(v.sur.split(/\s+/));
+    const re = v.user ? bound(core) : boundCs(core);
+    const key = v.keys.length === 1 ? v.keys[0] : "cog:" + v.sur.toUpperCase();
+    allMatches(re, text, m => push(m.index, m.index + m[0].length, key, 1, v.keys.length === 1 ? undefined : "cog"));
   });
-  // dati riconoscibili dalla forma
+  // 6. dati riconoscibili dalla forma
   const PAT = [
-    ["cf", /(?<![\p{L}\d])[A-Z]{6}\d{2}[A-EHLMPR-T]\d{2}[A-Z]\d{3}[A-Z](?![\p{L}\d])/giu],
-    ["iban", /(?<![A-Za-z\d])IT\d{2}(?: ?[0-9A-Z]){23}(?![0-9A-Za-z])/gi],
-    ["mail", /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g],
-    ["doc", /(?<![\p{L}\d])(?:[A-Z]{2}\d{5}[A-Z]{2}|[A-Z]{2}\d{7})(?![\p{L}\d])/gu],
-    ["targa", /(?<![\p{L}\d])[A-Z]{2}\s?\d{3}\s?[A-Z]{2}(?![\p{L}\d])/gu],
-    ["tel", /(?<![\w+])(?:\+39[\s.]?)?(?:3\d{2}|0\d{1,3})(?:[\s.\/-]?\d){5,8}(?!\d)/g],
-    ["ind", /(?<![\p{L}])(?:[Vv]ia|[Vv]iale|[Pp]iazza|[Pp]\.zza|[Cc]orso|[Vv]icolo|[Ll]argo|[Ll]ocalità|[Ll]oc\.|[Ss]trada|[Pp]odere)\s+(?:\p{Lu}[\p{L}'’.]*|\d{1,2})(?:\s+(?:\p{Lu}[\p{L}'’.]*|del|della|dei|degli|delle|di|d['’]\p{L}+|\d{1,2}))*(?:,?\s*(?:n\.\s*|civ\.\s*)?\d{1,4}\s?[A-Za-z]?(?![\p{L}\d]))?/gu]
+    ["cf", /(?<![\p{L}\d])[A-Z]{6}\d{2}[A-EHLMPR-T]\d{2}[A-Z]\d{3}[A-Z](?![\p{L}\d])/giu, true],
+    ["iban", /(?<![A-Za-z\d])IT\d{2}(?: ?[0-9A-Z]){23}(?![0-9A-Za-z])/gi, true],
+    ["mail", /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, false],
+    ["soc", /(?<![\w@.])@[A-Za-z0-9_](?:[A-Za-z0-9_.]{1,28}[A-Za-z0-9_])/g, false],
+    ["ip", /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?!\d|\.\d)/g, false],
+    ["doc", /(?<![\p{L}\d])(?:[A-Z]{2}\d{5}[A-Z]{2}|[A-Z]{2}\d{7})(?![\p{L}\d])/gu, true],
+    ["cod", /(?<![A-Z\d])IT\d{3}E\d{8}(?![A-Z\d])/g, true],
+    ["cod", /(?<![A-Za-z\d])(?=[A-HJ-NPR-Z0-9]*\d)(?=[A-HJ-NPR-Z0-9]*[A-HJ-NPR-Z])[A-HJ-NPR-Z0-9]{17}(?![A-Za-z\d])/g, true],
+    ["cod", /(?<![\d.,])\d{15}(?![\d.,])/g, true],
+    ["targa", /(?<![\p{L}\d])[A-Z]{2}\s?\d{3}\s?[A-Z]{2}(?![\p{L}\d])/gu, true],
+    ["tel", /(?<![\w+])(?:\+39[\s.]?)?(?:3\d{2}|0\d{1,3})[\s.\/-]?\d(?:[\s.-]?\d){4,7}(?!\d|\/\d)/g, true],
+    ["ind", /(?<![\p{L}])(?:[Vv]ia|[Vv]iale|[Pp]iazza|[Pp]iazzale|[Pp]\.zza|[Cc]orso|[Vv]icolo|[Ll]argo|[Ll]ocalità|[Ll]oc\.|[Cc]ontrada|[Cc]\.da|[Ss]trada|[Pp]odere|[Ff]razione)\s+(?:\p{Lu}\.|\p{Lu}[\p{L}'’]*|\d{1,2})(?:\s+(?:\p{Lu}\.|\p{Lu}[\p{L}'’]*|del|della|dei|degli|delle|di|d['’]\p{L}+|\d{1,2}))*(?:,?\s*(?:n\.\s*|civ\.\s*)?(?:\d{1,4}\s?[A-Za-z]?|snc)(?![\p{L}\d]))?/gu, false]
   ];
-  PAT.forEach(([k, re]) => allMatches(re, text, m => {
+  PAT.forEach(([k, re, res]) => allMatches(re, text, m => {
     let v = m[0];
     if(k === "tel" && v.replace(/\D/g, "").length < 8) return;
     if(k === "ind"){ v = v.replace(/(?:\s+(?:del|della|dei|degli|delle|di))+$/, ""); }
-    cands.push({s:m.index, e:m.index + v.length, key:k + ":" + v.toUpperCase().replace(/[\s.\/-]/g, ""), kind:k, pr:1, res:k !== "ind"});
+    push(m.index, m.index + v.length, k + ":" + v.toUpperCase().replace(/[\s.\/-]/g, ""), 1, k);
+    cands[cands.length - 1].res = res;
   }));
+  // codici annunciati dal contesto: patente n. …, telaio …, IMEI …, POD …
+  allMatches(/(?<![\p{L}])(?:patente|carta d['’]identità|passaporto|permesso di soggiorno|documento|telaio|IMEI|POD|PDR|matricola|seriale|codice cliente|utenza)(?:\s+(?:di guida|marocchin[oa]|n\.|nr\.|n°|numero|nr))*[\s:]+([A-Z0-9][A-Z0-9-]{4,}[A-Z0-9])(?![\p{L}\d])/giu, text, m => {
+    const v = m[1];
+    if(!/\d/.test(v)) return;
+    const s = m.index + m[0].lastIndexOf(v);
+    push(s, s + v.length, "cod:" + v.toUpperCase().replace(/-/g, ""), 2, "cod");
+  });
   allMatches(/(\bnat[oa]\b[^.\n]{0,60}?\bil\s+)(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+\p{Ll}+\s+\d{4})/giu, text, m => {
     const s = m.index + m[1].length;
-    cands.push({s, e:s + m[2].length, key:"nas:" + m[2].replace(/\s/g, ""), kind:"nas", pr:2});
+    push(s, s + m[2].length, "nas:" + m[2].replace(/\s/g, ""), 2, "nas");
   });
   // conflitti: le date e gli orari non sono telefoni, targhe o documenti
   const overlaps = (a, b) => a.s < b[1] && b[0] < a.e;
@@ -833,8 +892,8 @@ function renderMap(){
 function labelRe(label){
   const inner = label.slice(1, -1), parts = inner.split(/\s+/).map(reEsc);
   const core = parts.join("\\s*");
-  const bare = /^M\d+$/.test(inner) ? "" : "|(?<![\\p{L}\\d\\[])" + parts.join("\\s+") + "(?!\\d)";
-  return new RegExp("\\[\\s*" + core + "\\s*\\]" + bare, "gu");
+  const bare = /^M\d+$/.test(inner) ? "|(?<![\\p{L}\\d\\[])" + inner + "(?![\\p{L}\\d])" : "|(?<![\\p{L}\\d\\[])" + parts.join("\\s+") + "(?!\\d)";
+  return new RegExp("\\[\\s*" + core + "\\s*\\]" + bare, "giu");
 }
 function cleanMd(t){
   return t.replace(/\r\n/g, "\n").replace(/\*\*(.+?)\*\*/g, "$1").replace(/__(.+?)__/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/^\s*\*\s+/gm, "- ").replace(/^\s*[-*_]{3,}\s*$/gm, "");
@@ -856,7 +915,7 @@ $("rForm").addEventListener("submit", ev => {
     (n ? used : unused).push(x.label);
   });
   const left = [...new Set((t.match(/\[[^\]\n]{1,40}\]/g) || []))];
-  const ours = left.filter(s => /^\[(Soggetto|M|CF|IBAN|Email|Documento|Targa|Telefono|Indirizzo|Data di nascita)\s*\d+\]$/.test(s));
+  const ours = left.filter(s => new RegExp("^\\[(" + LABEL_WORDS + ")\\s*\\d+\\]$", "i").test(s));
   const fill = left.filter(s => !ours.includes(s));
   const h = [];
   if(!lastMap.length) h.push(`<div class="note"><b>Tabella vuota</b>La pagina è stata ricaricata o la tabella è stata cancellata: le etichette restano nel testo e vanno completate a mano.</div>`);
